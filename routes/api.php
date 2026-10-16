@@ -1,7 +1,10 @@
 <?php
 
 use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\CajaController;
 use App\Http\Controllers\Api\CategoriaController;
+use App\Http\Controllers\Api\CompraController;
+use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\MovimientoInventarioController;
 use App\Http\Controllers\Api\ProductoController;
 use App\Http\Controllers\Api\VentaController;
@@ -13,14 +16,10 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 */
 
-// Estado de la API
 Route::get('/estado', function () {
     return response()->json([
         'success' => true,
-
-        'message' =>
-            'La API de Kiosko Junior funciona correctamente.',
-
+        'message' => 'La API de Kiosko Junior funciona correctamente.',
         'data' => [
             'sistema' => 'Kiosko Junior',
             'backend' => 'Laravel 12',
@@ -30,39 +29,19 @@ Route::get('/estado', function () {
     ]);
 });
 
-// Login
-Route::post(
-    '/login',
-    [AuthController::class, 'login']
-);
-
+Route::post('/login', [AuthController::class, 'login']);
 
 /*
 |--------------------------------------------------------------------------
 | Productos y categorías públicas
 |--------------------------------------------------------------------------
-|
-| El cliente puede ver productos y categorías
-| sin necesidad de iniciar sesión.
-|
 */
 
-Route::apiResource(
-    'categorias',
-    CategoriaController::class
-)->only([
-    'index',
-    'show',
-]);
+Route::apiResource('categorias', CategoriaController::class)
+    ->only(['index', 'show']);
 
-Route::apiResource(
-    'productos',
-    ProductoController::class
-)->only([
-    'index',
-    'show',
-]);
-
+Route::apiResource('productos', ProductoController::class)
+    ->only(['index', 'show']);
 
 /*
 |--------------------------------------------------------------------------
@@ -73,17 +52,8 @@ Route::apiResource(
 Route::middleware('auth:sanctum')->group(function () {
 
     // Usuario autenticado
-    Route::get(
-        '/usuario',
-        [AuthController::class, 'usuario']
-    );
-
-    // Cerrar sesión
-    Route::post(
-        '/logout',
-        [AuthController::class, 'logout']
-    );
-
+    Route::get('/usuario', [AuthController::class, 'usuario']);
+    Route::post('/logout', [AuthController::class, 'logout']);
 
     /*
     |--------------------------------------------------------------------------
@@ -91,21 +61,21 @@ Route::middleware('auth:sanctum')->group(function () {
     |--------------------------------------------------------------------------
     */
 
-    Route::middleware(
-        'rol:ADMINISTRADOR,VENDEDOR'
-    )->group(function () {
+    Route::middleware('rol:ADMINISTRADOR,VENDEDOR')->group(function () {
+
+        // Caja
+        Route::get('/caja/actual', [CajaController::class, 'actual']);
+        Route::post('/caja/abrir', [CajaController::class, 'abrir']);
+        Route::post('/caja/cerrar', [CajaController::class, 'cerrar']);
+        Route::get('/caja/resumen', [CajaController::class, 'resumen']);
+
+        // Resumen de ventas
+        Route::get('/ventas/resumen', [VentaController::class, 'resumen']);
 
         // Ventas
-        Route::apiResource(
-            'ventas',
-            VentaController::class
-        )->only([
-            'index',
-            'store',
-            'show',
-        ]);
+        Route::apiResource('ventas', VentaController::class)
+            ->only(['index', 'store', 'show']);
     });
-
 
     /*
     |--------------------------------------------------------------------------
@@ -113,38 +83,29 @@ Route::middleware('auth:sanctum')->group(function () {
     |--------------------------------------------------------------------------
     */
 
-    Route::middleware(
-        'rol:ADMINISTRADOR'
-    )->group(function () {
+    Route::middleware('rol:ADMINISTRADOR')->group(function () {
 
-        // Crear, editar y eliminar categorías
-        Route::apiResource(
-            'categorias',
-            CategoriaController::class
-        )->only([
-            'store',
-            'update',
-            'destroy',
-        ]);
+        // Dashboard financiero
+        Route::get(
+            '/dashboard/resumen',
+            [DashboardController::class, 'resumen']
+        );
 
-        // Crear, editar y eliminar productos
-        Route::apiResource(
-            'productos',
-            ProductoController::class
-        )->only([
-            'store',
-            'update',
-            'destroy',
-        ]);
+        // Categorías
+        Route::apiResource('categorias', CategoriaController::class)
+            ->only(['store', 'update', 'destroy']);
+
+        // Productos
+        Route::apiResource('productos', ProductoController::class)
+            ->only(['store', 'update', 'destroy']);
 
         // Movimientos de inventario
-        Route::apiResource(
-            'movimientos',
-            MovimientoInventarioController::class
-        )->only([
-            'index',
-            'store',
-            'show',
-        ]);
+        Route::apiResource('movimientos', MovimientoInventarioController::class)
+            ->only(['index', 'store', 'show']);
+
+        // Compras
+        Route::get('/compras', [CompraController::class, 'index']);
+        Route::post('/compras', [CompraController::class, 'store']);
+        Route::get('/compras/{id}', [CompraController::class, 'show']);
     });
 });

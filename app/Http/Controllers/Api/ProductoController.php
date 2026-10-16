@@ -11,6 +11,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class ProductoController extends Controller
 {
@@ -23,21 +24,19 @@ class ProductoController extends Controller
             ->when(
                 $request->buscar,
                 function ($consulta, $buscar) {
-                    $consulta->where(
-                        function ($subconsulta) use ($buscar) {
-                            $subconsulta
-                                ->where(
-                                    'nombre',
-                                    'like',
-                                    "%{$buscar}%"
-                                )
-                                ->orWhere(
-                                    'codigo_barras',
-                                    'like',
-                                    "%{$buscar}%"
-                                );
-                        }
-                    );
+                    $consulta->where(function ($subconsulta) use ($buscar) {
+                        $subconsulta
+                            ->where(
+                                'nombre',
+                                'like',
+                                "%{$buscar}%"
+                            )
+                            ->orWhere(
+                                'codigo_barras',
+                                'like',
+                                "%{$buscar}%"
+                            );
+                    });
                 }
             )
             ->when(
@@ -98,11 +97,19 @@ class ProductoController extends Controller
     }
 
     /**
-     * Registra un producto.
+     * Registra un producto o comida.
      */
     public function store(Request $request): JsonResponse
     {
         $datos = $request->validate([
+            'tipo' => [
+                'required',
+                Rule::in([
+                    'PRODUCTO',
+                    'COMIDA',
+                ]),
+            ],
+
             'categoria_id' => [
                 'required',
                 'integer',
@@ -110,7 +117,8 @@ class ProductoController extends Controller
             ],
 
             'codigo_barras' => [
-                'required',
+                'required_if:tipo,PRODUCTO',
+                'nullable',
                 'string',
                 'max:50',
                 'unique:productos,codigo_barras',
@@ -128,17 +136,44 @@ class ProductoController extends Controller
                 'max:500',
             ],
 
+            /*
+            |--------------------------------------------------------------------------
+            | Compra
+            |--------------------------------------------------------------------------
+            */
+
             'precio_compra' => [
-                'required',
+                'required_if:tipo,PRODUCTO',
+                'nullable',
                 'numeric',
                 'min:0',
                 'decimal:0,2',
             ],
 
+            'unidad_compra' => [
+                'required_if:tipo,PRODUCTO',
+                'nullable',
+                'string',
+                'max:50',
+            ],
+
+            'cantidad_por_paquete' => [
+                'required_if:tipo,PRODUCTO',
+                'nullable',
+                'integer',
+                'min:1',
+            ],
+
+            /*
+            |--------------------------------------------------------------------------
+            | Venta
+            |--------------------------------------------------------------------------
+            */
+
             'precio_venta' => [
                 'required',
                 'numeric',
-                'gte:precio_compra',
+                'min:0',
                 'decimal:0,2',
             ],
 
@@ -160,24 +195,119 @@ class ProductoController extends Controller
             ],
         ]);
 
+        /*
+        |--------------------------------------------------------------------------
+        | PRODUCTO
+        |--------------------------------------------------------------------------
+        |
+        | Ejemplo:
+        |
+        | Precio paquete = S/30
+        | 12 unidades
+        |
+        | Costo unitario = 30 / 12 = S/2.50
+        |
+        */
+
+        if ($datos['tipo'] === 'PRODUCTO') {
+
+            $cantidadPorPaquete =
+                (int) $datos['cantidad_por_paquete'];
+
+            $datos['costo_unitario'] = round(
+                $datos['precio_compra'] / $cantidadPorPaquete,
+                2
+            );
+
+            /*
+            |----------------------------------------------------------------------
+            | El precio de venta es por unidad.
+            |----------------------------------------------------------------------
+            */
+
+            if (
+                $datos['precio_venta'] <
+                $datos['costo_unitario']
+            ) {
+                throw ValidationException::withMessages([
+                    'precio_venta' =>
+                        'El precio de venta no puede ser menor que el costo por unidad.',
+                ]);
+            }
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | COMIDA
+        |--------------------------------------------------------------------------
+        |
+        | Las comidas se venden por unidad.
+        | No utilizan código de barras ni compra por paquete.
+        |
+        */
+
+        if ($datos['tipo'] === 'COMIDA') {
+
+            $datos['codigo_barras'] = null;
+
+            $datos['precio_compra'] = 0;
+
+            $datos['unidad_compra'] = 'UNIDAD';
+
+            $datos['cantidad_por_paquete'] = 1;
+
+            $datos['costo_unitario'] = 0;
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Crear producto + movimiento inicial
+        |--------------------------------------------------------------------------
+        */
+
         $producto = DB::transaction(
             function () use ($datos) {
-                $stockInicial = (int) $datos['stock'];
+
+                $stockInicial =
+                    (int) $datos['stock'];
 
                 $datos['estado'] =
                     $datos['estado'] ?? true;
 
-                $producto = Producto::create($datos);
+                $producto =
+                    Producto::create($datos);
+
+                /*
+                |--------------------------------------------------------------------------
+                | Movimiento de stock inicial
+                |--------------------------------------------------------------------------
+                */
 
                 if ($stockInicial > 0) {
+
                     MovimientoInventario::create([
-                        'producto_id' => $producto->id,
-                        'tipo' => 'ENTRADA',
-                        'cantidad' => $stockInicial,
-                        'stock_anterior' => 0,
-                        'stock_nuevo' => $stockInicial,
-                        'motivo' => 'Stock inicial del producto',
-                        'referencia' => 'REGISTRO-INICIAL',
+                        'producto_id' =>
+                            $producto->id,
+
+                        'tipo' =>
+                            'ENTRADA',
+
+                        'cantidad' =>
+                            $stockInicial,
+
+                        'stock_anterior' =>
+                            0,
+
+                        'stock_nuevo' =>
+                            $stockInicial,
+
+                        'motivo' =>
+                            $datos['tipo'] === 'COMIDA'
+                                ? 'Stock inicial de comida'
+                                : 'Stock inicial del producto',
+
+                        'referencia' =>
+                            'REGISTRO-INICIAL',
                     ]);
                 }
 
@@ -191,9 +321,13 @@ class ProductoController extends Controller
             'success' => true,
 
             'message' =>
-                'Producto registrado correctamente.',
+                $datos['tipo'] === 'COMIDA'
+                    ? 'Comida registrada correctamente.'
+                    : 'Producto registrado correctamente.',
 
-            'data' => new ProductoResource($producto),
+            'data' =>
+                new ProductoResource($producto),
+
         ], 201);
     }
 
@@ -203,6 +337,7 @@ class ProductoController extends Controller
     public function show(
         Producto $producto
     ): JsonResponse {
+
         $producto->load('categoria');
 
         return response()->json([
@@ -211,18 +346,28 @@ class ProductoController extends Controller
             'message' =>
                 'Producto consultado correctamente.',
 
-            'data' => new ProductoResource($producto),
+            'data' =>
+                new ProductoResource($producto),
         ]);
     }
 
     /**
-     * Actualiza un producto.
+     * Actualiza un producto o comida.
      */
     public function update(
         Request $request,
         Producto $producto
     ): JsonResponse {
+
         $datos = $request->validate([
+            'tipo' => [
+                'required',
+                Rule::in([
+                    'PRODUCTO',
+                    'COMIDA',
+                ]),
+            ],
+
             'categoria_id' => [
                 'required',
                 'integer',
@@ -230,7 +375,8 @@ class ProductoController extends Controller
             ],
 
             'codigo_barras' => [
-                'required',
+                'required_if:tipo,PRODUCTO',
+                'nullable',
                 'string',
                 'max:50',
 
@@ -252,17 +398,44 @@ class ProductoController extends Controller
                 'max:500',
             ],
 
+            /*
+            |--------------------------------------------------------------------------
+            | Compra
+            |--------------------------------------------------------------------------
+            */
+
             'precio_compra' => [
-                'required',
+                'required_if:tipo,PRODUCTO',
+                'nullable',
                 'numeric',
                 'min:0',
                 'decimal:0,2',
             ],
 
+            'unidad_compra' => [
+                'required_if:tipo,PRODUCTO',
+                'nullable',
+                'string',
+                'max:50',
+            ],
+
+            'cantidad_por_paquete' => [
+                'required_if:tipo,PRODUCTO',
+                'nullable',
+                'integer',
+                'min:1',
+            ],
+
+            /*
+            |--------------------------------------------------------------------------
+            | Venta
+            |--------------------------------------------------------------------------
+            */
+
             'precio_venta' => [
                 'required',
                 'numeric',
-                'gte:precio_compra',
+                'min:0',
                 'decimal:0,2',
             ],
 
@@ -284,6 +457,52 @@ class ProductoController extends Controller
             ],
         ]);
 
+        /*
+        |--------------------------------------------------------------------------
+        | PRODUCTO
+        |--------------------------------------------------------------------------
+        */
+
+        if ($datos['tipo'] === 'PRODUCTO') {
+
+            $cantidadPorPaquete =
+                (int) $datos['cantidad_por_paquete'];
+
+            $datos['costo_unitario'] = round(
+                $datos['precio_compra'] / $cantidadPorPaquete,
+                2
+            );
+
+            if (
+                $datos['precio_venta'] <
+                $datos['costo_unitario']
+            ) {
+                throw ValidationException::withMessages([
+                    'precio_venta' =>
+                        'El precio de venta no puede ser menor que el costo por unidad.',
+                ]);
+            }
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | COMIDA
+        |--------------------------------------------------------------------------
+        */
+
+        if ($datos['tipo'] === 'COMIDA') {
+
+            $datos['codigo_barras'] = null;
+
+            $datos['precio_compra'] = 0;
+
+            $datos['unidad_compra'] = 'UNIDAD';
+
+            $datos['cantidad_por_paquete'] = 1;
+
+            $datos['costo_unitario'] = 0;
+        }
+
         $producto->update($datos);
 
         $producto->load('categoria');
@@ -292,7 +511,9 @@ class ProductoController extends Controller
             'success' => true,
 
             'message' =>
-                'Producto actualizado correctamente.',
+                $datos['tipo'] === 'COMIDA'
+                    ? 'Comida actualizada correctamente.'
+                    : 'Producto actualizado correctamente.',
 
             'data' => new ProductoResource(
                 $producto->fresh(['categoria'])
@@ -306,15 +527,20 @@ class ProductoController extends Controller
     public function destroy(
         Producto $producto
     ): JsonResponse {
-        $tieneMovimientos =
-            $producto->movimientosInventario()->exists();
 
-        $tieneVentas = DetalleVenta::where(
-            'producto_id',
-            $producto->id
-        )->exists();
+        $tieneMovimientos =
+            $producto
+                ->movimientosInventario()
+                ->exists();
+
+        $tieneVentas =
+            DetalleVenta::where(
+                'producto_id',
+                $producto->id
+            )->exists();
 
         if ($tieneMovimientos || $tieneVentas) {
+
             return response()->json([
                 'success' => false,
 

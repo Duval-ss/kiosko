@@ -15,6 +15,7 @@ class Venta extends Model
 
     protected $fillable = [
         'user_id',
+        'caja_id',
         'numero_venta',
         'fecha',
         'subtotal',
@@ -36,6 +37,9 @@ class Venta extends Model
         ];
     }
 
+    /**
+     * Usuario que registró la venta.
+     */
     public function usuario(): BelongsTo
     {
         return $this->belongsTo(
@@ -44,6 +48,20 @@ class Venta extends Model
         );
     }
 
+    /**
+     * Caja en la que se registró la venta.
+     */
+    public function caja(): BelongsTo
+    {
+        return $this->belongsTo(
+            Caja::class,
+            'caja_id'
+        );
+    }
+
+    /**
+     * Detalles de productos de la venta.
+     */
     public function detalles(): HasMany
     {
         return $this->hasMany(
